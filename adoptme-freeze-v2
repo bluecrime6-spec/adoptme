@@ -1,4 +1,4 @@
--- ROBLOX AUTO PLAY (red theme, no Yes step) - Delta - v34 (Done button tap higher)
+-- ROBLOX AUTO PLAY (red theme) - Delta - v35 (Play fix: click + retry + real button finder)
 if getgenv and getgenv().AutoPlayStop then pcall(getgenv().AutoPlayStop) end
 
 local Players = game:GetService("Players")
@@ -35,9 +35,14 @@ local OFFSET_STEP = 12
 
 local FACE_DIR = Vector3.new(-1.00, 0, 0.02)
 
+-- retry tap untuk step biasa (geser dikit tiap percobaan)
+local STEP_TRIES = 4
+local STEP_SWEEP = { 0, 12, -12, 0 }
+
 local STEPS = {
-    { name = "Play",     method = "fire",  path = "NewsApp.EnclosingFrame.MainFrame.Buttons.PlayButton" },
-    { name = "Home",     method = "fire",  path = "DialogApp.Dialog.SpawnChooserDialog.UpperCardContainer.ChoicesContent.Choices.Home.Button" },
+    -- Play & Home diganti ke "click" (sebelumnya "fire" yang sering nggak direspon game)
+    { name = "Play",     method = "click", path = "NewsApp.EnclosingFrame.MainFrame.Buttons.PlayButton" },
+    { name = "Home",     method = "click", path = "DialogApp.Dialog.SpawnChooserDialog.UpperCardContainer.ChoicesContent.Choices.Home.Button" },
     { name = "Backpack", method = "click", path = "ToolApp.Frame.Hotbar.OpenBackpackContainer.OpenBackpack",
       skipIf = "BackpackApp.Frame.Body.Categories.Buttons.gifts" },
     { name = "Gifts",    method = "click", dy = 10, path = "BackpackApp.Frame.Body.Categories.Buttons.gifts" },
@@ -167,7 +172,14 @@ local function getTarget(step)
         return nil
     end
     local obj = resolve(step.path)
-    if obj and reallyVisible(obj) then return obj end
+    if obj and reallyVisible(obj) then
+        -- kalau yang ketemu cuma Frame pembungkus, cari tombol aslinya di dalam
+        if not obj:IsA("GuiButton") then
+            local d = obj:FindFirstChildWhichIsA("GuiButton", true)
+            if d and reallyVisible(d) then return d end
+        end
+        return obj
+    end
 end
 
 local function inset(btn)
@@ -527,9 +539,14 @@ local function cycle(id)
             if target then
                 task.wait(SETTLE)
                 target = getTarget(s) or target
-                press(target, s.method, s.name, s.dy)
+                -- tap berulang (posisi digeser dikit) sampai tombolnya hilang
+                for try = 1, STEP_TRIES do
+                    if not (running and id == runId) then return end
+                    press(target, s.method, s.name, (s.dy or 0) + (STEP_SWEEP[try] or 0))
+                    task.wait(AFTER_CLICK)
+                    if not (target.Parent and reallyVisible(target)) then break end
+                end
                 setRow(i, "done")
-                task.wait(AFTER_CLICK)
             else
                 setRow(i, "wait")
             end
@@ -606,7 +623,7 @@ local DONE_METHOD   = "click"
 
 local CHECK_EVERY = 0.1
 local RESET_AFTER = 6
-local RETRY_WAIT = 0.6      -- faster retries
+local RETRY_WAIT = 0.6
 
 local autoAccept = AUTO_ACCEPT_DEFAULT
 local handled = setmetatable({}, { __mode = "k" })
@@ -676,15 +693,13 @@ local TRADE_CONFIRM   = "TradeApp.Frame.ConfirmationFrame.Accept"
 -- warning pop-ups (unbalanced trade, someone sent a trade ...): pressed fast
 local OK_WORDS = { ok = true, okay = true, ["continue"] = true, proceed = true, confirm = true }
 
-local NEG_DELAY = 3        -- step 2: seconds after the offer Accept appears (now 3)
+local NEG_DELAY = 3        -- step 2: seconds after the offer Accept appears
 local CONFIRM_DELAY = 1    -- step 3: seconds after the final Confirm appears
 
--- the trade buttons were tapped too HIGH (dot above the button). This moves the tap lower.
--- If the dot is still above the button, raise it. If it is below, lower it.
+-- trade buttons: positive = tap lower, negative = tap higher
 local TRADE_DY = 28
 
--- the Done button (new pet screen) was tapped too LOW. Negative moves the tap UP.
--- If the dot is still below the button use a bigger negative number (-35). If it is too high, use -15.
+-- Done button (new pet screen): negative = tap higher
 local DONE_DY = -25
 
 local FIRST_METHOD  = "click"
@@ -740,8 +755,7 @@ local function tradeTick()
         end
     end
 
-    -- 2) trade window, offer Accept: press NEG_DELAY seconds after it appears.
-    --    If the press did not work (button still says Accept), it tries again every 1.5s.
+    -- 2) trade window, offer Accept
     local n = resolve(TRADE_NEGOTIATE)
     if n and reallyVisible(n) then
         local now = tick()
@@ -753,9 +767,9 @@ local function tradeTick()
         end
 
         if blocked then
-            negWasBlocked = true          -- already accepted, wait
+            negWasBlocked = true
         else
-            if negWasBlocked then         -- the offer changed (pet added), count the delay again
+            if negWasBlocked then
                 negWasBlocked = false
                 negSince = now
                 negTries = 0
